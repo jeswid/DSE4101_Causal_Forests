@@ -31,5 +31,5 @@ colnames(X_df) <- paste0("X", 1:p)  # Rename covariates as X1, X2, ..., Xp
 data <- data.frame(Y = Y, T = T, X_df)
 
 #save into an R file
-saveRDS(data, file = "../data.rds")
+saveRDS(data, file = "data.rds")
 ```

@@ -22,7 +22,7 @@ library(caret)
 
 ## Train-test split
 ```{r}
-data = readRDS("../data.rds")
+data = readRDS("data.rds")
 
 #80% train, 20% test
 train_i <- createDataPartition(data$Y, p = 0.8, list = FALSE)
