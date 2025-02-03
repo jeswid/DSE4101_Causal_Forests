@@ -33,7 +33,7 @@ We simulate synthetic datasets with randomized treatment assignment and heteroge
    ```
 ---
 
-###Contributors
+## Contributors
 
 1. O'rianna Yew: yeworianna@gmail.com
 2. Lily Rozana: lily.rozana.joehannaung@gmail.com
