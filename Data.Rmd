@@ -1,0 +1,35 @@
+---
+title: "Data"
+author: "Jessica"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Data Generating Process
+```{r}
+
+set.seed(123)
+n <- 5000  # Number of observations
+p <- 15   # Number of covariates (can change this freely)
+
+X <- matrix(runif(n * p, -1, 1), nrow = n, ncol = p)  # Ensure correct shape
+T <- rbinom(n, 1, prob = 0.5)  # Randomized treatment assignment (binary)
+true_tau <- 2 * X[, 1]  # Heterogeneous treatment effect 
+
+# Generate beta with length p (acts as the coefficient vector that determines how each covariate Xj affects Y)
+beta <- matrix(runif(p, -2, 2), ncol = 1)  # Random coefficients for generality
+
+Y <- 5 + X %*% beta + true_tau * T + rnorm(n, 0, 1)  # Outcome
+
+# Combine all into one data frame
+X_df <- as.data.frame(X)
+colnames(X_df) <- paste0("X", 1:p)  # Rename covariates as X1, X2, ..., Xp
+data <- data.frame(Y = Y, T = T, X_df)
+
+#save into an R file
+saveRDS(data, file = "../data.rds")

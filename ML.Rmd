@@ -1,0 +1,153 @@
+---
+title: "DSE4101 Group project"
+author: "o'rianna"
+date: "2025-02-02"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#install.packages("devtools")
+library(devtools) 
+#install_github("susanathey/causalTree")
+#install.packages("grf")
+#install.packages("caret")
+library(causalTree) 
+library(grf)
+library(caret)
+```
+
+## Data Generating Process
+```{r}
+
+set.seed(123)
+n <- 5000  # Number of observations
+p <- 15   # Number of covariates (can change this freely)
+
+X <- matrix(runif(n * p, -1, 1), nrow = n, ncol = p)  # Ensure correct shape
+T <- rbinom(n, 1, prob = 0.5)  # Randomized treatment assignment (binary)
+true_tau <- 2 * X[, 1]  # Heterogeneous treatment effect 
+
+# Generate beta with length p (acts as the coefficient vector that determines how each covariate Xj affects Y)
+beta <- matrix(runif(p, -2, 2), ncol = 1)  # Random coefficients for generality
+
+Y <- 5 + X %*% beta + true_tau * T + rnorm(n, 0, 1)  # Outcome
+
+# Combine all into one data frame
+X_df <- as.data.frame(X)
+colnames(X_df) <- paste0("X", 1:p)  # Rename covariates as X1, X2, ..., Xp
+data <- data.frame(Y = Y, T = T, X_df)
+
+#80% train, 20% test
+train_i <- createDataPartition(data$Y, p = 0.8, list = FALSE)
+train_data <- data[train_i, ]
+test_data <- data[-train_i, ]
+
+X_train <- as.matrix(train_data[, -(1:2)])  # Covariates only
+T_train <- train_data$T
+Y_train <- train_data$Y
+
+X_test <- as.matrix(test_data[, -(1:2)])
+T_test <- test_data$T
+Y_test <- test_data$Y
+
+```
+
+## Causal Trees
+
+```{r}
+# Train Causal Tree
+formula1 <- as.formula(paste("Y ~", paste(colnames(as.data.frame(X_train)), collapse = ' + ')))
+
+causal_tree <- causalTree(
+  formula = formula1,
+  data = data.frame(Y = Y_train,X_train),
+  treatment = T_train,
+  split.Rule = "CT",  # Use Causal Tree splitting rule
+  split.Honest = TRUE,
+  cv.option = "CT",  # Honest cross-validation
+  split.alpha = 1, 
+  cv.Honest = TRUE,
+  split.Bucket = TRUE,
+  bucketNum = 5,
+  bucketMax = 100,
+  minsize = 100
+)
+
+# Honest Estimation
+honest_tree <- honest.causalTree(
+  formula = formula1,
+  data = data.frame(Y=Y_train, X_train),
+  treatment = T_train,
+  est_data = data.frame(Y = Y_test, X_test),
+  est_treatment = T_test,  
+  split.alpha = 0.5,
+  split.Rule = "CT",
+  split.Honest = TRUE,
+  cv.alpha = 0.5,
+  cv.option = "CT",
+  cv.Honest = TRUE,
+  split.Bucket = TRUE,
+  bucketNum = 5,
+  bucketMax = 100, # maximum number of buckets
+  minsize = 100
+)
+
+# Predict Treatment Effects
+CATE_preds_honestTree <- predict(honest_tree, newdata = data.frame(Y = Y_test, X_test), type = "vector")
+
+plot(CATE_preds_honestTree)
+```
+
+
+## Causal Forests
+
+```{r}
+# Train Causal Forest
+causal_forest1 <- causal_forest(
+  X = X_train, 
+  Y = Y_train, 
+  W = T_train
+)
+
+# Predict Treatment Effects
+preds <- predict(causal_forest1, X_test)$predictions
+hist(preds)
+
+#CATE estimates
+CATE_ALL_CF = average_treatment_effect(causal_forest1, target.sample = "all")
+average_treatment_effect(causal_forest1, target.sample = "treated")
+                                     
+
+```
+
+## MSE and RMSE
+
+```{r}
+prop_score <- mean(T_test)
+
+# Construct Y_star in our test sample
+Y_star <- T_test * (Y_test / prop_score) - (1 - T_test) * (Y_test / (1 - prop_score))
+
+
+# Honest Tree
+MSE_causalTree <- mean((Y_star - CATE_preds_honestTree)^2)
+
+# Causal Forest GRF
+MSE_cf <- mean((Y_star - CATE_ALL_CF)^2)
+
+MSE_causalTree
+MSE_cf
+
+RMSE_causalTree = sqrt(MSE_causalTree)
+RMSE_cf = sqrt(MSE_cf)
+
+RMSE_causalTree
+RMSE_cf
+```
+
+
+
