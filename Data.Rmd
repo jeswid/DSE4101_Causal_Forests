@@ -33,3 +33,4 @@ data <- data.frame(Y = Y, T = T, X_df)
 
 #save into an R file
 saveRDS(data, file = "../data.rds")
+```
