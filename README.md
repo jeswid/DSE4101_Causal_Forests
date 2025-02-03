@@ -23,12 +23,12 @@ We simulate synthetic datasets with randomized treatment assignment and heteroge
    
 2. **Run data generation**
    ```r
-   source("data.rmd")
+   source("data.Rmd")
    ```
    
 3. **Train and evaluate causal models**
    ```r
-   source("ML.rmd")
+   source("ML.Rmd")
    ```
 
 
