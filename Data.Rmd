@@ -12,7 +12,6 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ## Data Generating Process
 ```{r}
-
 set.seed(123)
 n <- 5000  # Number of observations
 p <- 15   # Number of covariates (can change this freely)
