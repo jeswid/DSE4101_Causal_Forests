@@ -10,7 +10,8 @@ We simulate synthetic datasets with randomized treatment assignment and heteroge
 ## 🛠️ How to Explore This Repository  
 
 ### 🔹 Key Files & Folders
-- **📂 `data.rmd`** – Code for generating synthetic datasets  
+- **📂 `data.rmd`** – Code for generating synthetic dataset
+- **📂 `data.Rds`** – Synthetic dataset   
 - **📂 `ML.rmd`** – Implementation of causal inference models and evaluation 
 - **📄 `README.md`** – This file! Start here for an overview  
 
@@ -30,6 +31,13 @@ We simulate synthetic datasets with randomized treatment assignment and heteroge
    ```r
    source("ML.Rmd")
    ```
+---
+
+## Contributors
+
+1. O'rianna Yew: yeworianna@gmail.com
+2. Lily Rozana: lily.rozana.joehannaung@gmail.com
+3. Jessica Widyawati: jessicawidyawati@gmail.com
 
 
 
