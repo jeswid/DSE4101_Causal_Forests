@@ -18,25 +18,120 @@ library(devtools)
 library(causalTree) 
 library(grf)
 library(caret)
+#install.packages("FNN")
+library(FNN)
+library(parallel)
+#install.packages("BART") 
+library(BART)
+#install.packages("dplyr")
+library(drgee)
+library(dplyr)
 ```
 
-## Train-test split
+## BART
+
 ```{r}
-data = readRDS("data.rds")
 
-#80% train, 20% test
-train_i <- createDataPartition(data$Y, p = 0.8, list = FALSE)
-train_data <- data[train_i, ]
-test_data <- data[-train_i, ]
+# Train separate BART models for treated and control groups
+treated_train <- train_data[train_data$T == 1, ] # Subset for treated group (T = 1)
+bart_treated <- wbart(x.train = treated_train[, -c(1,2)], y.train = treated_train$Y) # Train BART on treated group
 
-X_train <- as.matrix(train_data[, -(1:2)])  # Covariates only
-T_train <- train_data$T
-Y_train <- train_data$Y
+control_train <- train_data[train_data$T == 0, ] # Subset for control group (T = 0)
+bart_control <- wbart(x.train = control_train[, -c(1,2)], y.train = control_train$Y) # Train BART on control group
 
-X_test <- as.matrix(test_data[, -(1:2)])
-T_test <- test_data$T
-Y_test <- test_data$Y
+# Predict potential outcomes for test set
+Y1_hat_test <- predict(bart_treated, newdata = test_data[, -c(1,2)])  # Predicted Y if treated
+Y0_hat_test <- predict(bart_control, newdata = test_data[, -c(1,2)])  # Predicted Y if control
 
+# Compute estimated Individual Treatment Effects (ITE)
+tau_hat_test <- rowMeans(Y1_hat_test) - rowMeans(Y0_hat_test)
+
+# Bin test data based on X1 for CATE estimation
+num_bins <- 10  # Number of bins
+X1_bins_test <- cut(test_data$X1, breaks = num_bins, labels = FALSE)
+
+# Convert to a data frame for aggregation
+df_test_cate <- data.frame(X1_bins_test, tau_hat_test, true_tau = true_tau[-train_i])
+
+# Compute average estimated and true CATE in each bin
+CATE_estimates_test <- aggregate(tau_hat_test ~ X1_bins_test, data = df_test_cate, FUN = mean)$tau_hat_test
+CATE_true_test <- aggregate(true_tau ~ X1_bins_test, data = df_test_cate, FUN = mean)$true_tau
+
+# Compute RMSE of CATE estimates
+CATE_rmse_test <- sqrt(mean((CATE_estimates_test - CATE_true_test)^2, na.rm = TRUE))
+CATE_rmse_test
+```
+
+
+## Causal KNN
+
+```{r}
+causal_knn <- function(X, T, Y, k) {
+  n <- nrow(X)
+  tau_hat <- numeric(n)  # Store estimated CATE for each observation
+  
+  for (i in 1:n) {
+    # Find k nearest neighbors
+    neighbors <- knnx.index(X, query = matrix(X[i, ], nrow = 1), k = k)
+    
+    # Extract neighbors' treatment and outcome values
+    Y_neighbors <- Y[neighbors]
+    T_neighbors <- T[neighbors]
+    
+    # Compute local averages for treated and control groups
+    Y1_hat <- mean(Y_neighbors[T_neighbors == 1], na.rm = TRUE)
+    Y0_hat <- mean(Y_neighbors[T_neighbors == 0], na.rm = TRUE)
+    
+    # Estimate CATE
+    tau_hat[i] <- Y1_hat - Y0_hat
+  }
+  
+  return(tau_hat)
+}
+
+# Compute Estimated CATE for Each Observation
+k <- 10  # Number of neighbors
+tau_knn <- causal_knn(X, T, Y, k)
+
+# Replace any NA values in tau_knn with 0
+tau_knn[is.na(tau_knn)] <- 0
+
+# Compute RMSE to Compare tau_knn with true_tau
+rmse_knn <- sqrt(mean((tau_knn - true_tau)^2))
+rmse_knn
+```
+
+## AIPW
+```{r}
+# Fit the AIPW model using drgee
+covariate_names <- paste0("X", 1:p)  # Create a vector of covariate names, X1, X2, ..., Xp
+covariate_formula <- paste(covariate_names, collapse = " + ")  # Combine names into a formula string
+
+# Fit the AIPW model using drgee with correct formula syntax
+aipw_model_train <- drgee(
+  oformula = as.formula(paste("Y ~", covariate_formula)),  # Outcome model with covariates
+  eformula = as.formula(paste("T ~", covariate_formula)),  # Treatment model with covariates
+  elink = "logit",  # Logistic link function for the treatment model
+  data = train_data  # Data containing all the variables
+)
+summary(aipw_model_train)
+aipw_model_train$coefficients.all
+
+aipw_model_test <- drgee(
+  oformula = as.formula(paste("Y ~", covariate_formula)),  # Outcome model with covariates
+  eformula = as.formula(paste("T ~", covariate_formula)),  # Treatment model with covariates
+  elink = "logit",  # Logistic link function for the treatment model
+  data = test_data  # Data containing all the variables
+)
+summary(aipw_model_test)
+aipw_model_test$coefficients.all
+
+cat("Estimated CATE (Train):", aipw_model_train$coefficients, "\n")
+cat("Estimated CATE (Test):", aipw_model_test$coefficients, "\n")
+
+# Compute RMSE
+RMSE_AIPW <- sqrt(mean((aipw_model_train$coefficients.all - aipw_model_test$coefficients.all)^2, na.rm = TRUE))
+print(paste("RMSE:", round(RMSE_AIPW, 5)))
 ```
 
 ## Causal Trees
