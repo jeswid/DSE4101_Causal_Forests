@@ -11,7 +11,7 @@ We simulate synthetic datasets with randomized treatment assignment and heteroge
 
 ### 🔹 Key Files & Folders
 - **📂 `data.rmd`** – Code for generating synthetic dataset
-- **📂 `data.Rds`** – Synthetic dataset   
+- **📂 `data.rds`** – Synthetic dataset   
 - **📂 `ML.rmd`** – Implementation of causal inference models and evaluation 
 - **📄 `README.md`** – This file! Start here for an overview  
 
