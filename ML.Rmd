@@ -23,9 +23,66 @@ library(FNN)
 library(parallel)
 #install.packages("BART") 
 library(BART)
-#install.packages("dplyr")
-library(drgee)
 library(dplyr)
+```
+
+#train-test-split
+```{r}
+data = readRDS("data.rds")
+#80% train, 20% test
+train_i <- createDataPartition(data$Y, p = 0.8, list = FALSE)
+train_data <- data[train_i, ]
+test_data <- data[-train_i, ]
+
+X_train <- as.matrix(train_data[, -(1:2)])  # Covariates only
+T_train <- train_data$T
+Y_train <- train_data$Y
+
+X_test <- as.matrix(test_data[, -(1:2)])
+T_test <- test_data$T
+Y_test <- test_data$Y
+
+true_tau_training <- true_tau[train_i]
+true_tau_testing <- true_tau[-train_i]  
+```
+
+## AIPW
+```{r}
+train_data1 = train_data
+test_data1 = test_data
+
+# Step 1: Estimate Propensity Score (P(T = 1 | X))
+propensity_model <- glm(T ~ ., data = train_data1, family = binomial)
+train_data1$pscore <- predict(propensity_model, type = "response")
+test_data1$pscore <- predict(propensity_model, newdata = test_data1, type = "response")
+
+# Step 2: Estimate Outcome Models for T = 1 and T = 0
+outcome_model_1 <- lm(Y ~ ., data = train_data1[train_data1$T == 1, ])
+outcome_model_0 <- lm(Y ~ ., data = train_data1[train_data1$T == 0, ])
+
+# Predict outcomes for all observations
+train_data1$mu_1 <- predict(outcome_model_1, newdata = train_data1)
+train_data1$mu_0 <- predict(outcome_model_0, newdata = train_data1)
+test_data1$mu_1 <- predict(outcome_model_1, newdata = test_data1)
+test_data1$mu_0 <- predict(outcome_model_0, newdata = test_data1)
+
+# Step 3: Compute AIPW scores
+train_data1$aipw <- (train_data1$T * (train_data1$Y - train_data1$mu_1) / train_data1$pscore) +
+  ((1 - train_data1$T) * (train_data1$Y - train_data1$mu_0) / (1 - train_data1$pscore)) +
+  train_data1$mu_1 - train_data1$mu_0
+
+test_data1$aipw <- (test_data1$T * (test_data1$Y - test_data1$mu_1) / test_data1$pscore) +
+  ((1 - test_data1$T) * (test_data1$Y - test_data1$mu_0) / (1 - test_data1$pscore)) +
+  test_data1$mu_1 - test_data1$mu_0
+
+# Step 4: Estimate Conditional Average Treatment Effect (CATE)
+cate_model <- lm(aipw ~ ., data = train_data1)  # CATE model
+test_data1$cate_hat <- predict(cate_model, newdata = test_data1)
+
+# Compute RMSE of CATE estimation
+#true_cate_test <- 2 * test_data1$X1  # True CATE for test set
+MSE_AIPW <- mean((test_data1$cate_hat - true_tau_testing)^2)
+MSE_AIPW
 ```
 
 ## BART
@@ -55,30 +112,31 @@ df_test_cate <- data.frame(X1_bins_test, tau_hat_test, true_tau = true_tau[-trai
 
 # Compute average estimated and true CATE in each bin
 CATE_estimates_test <- aggregate(tau_hat_test ~ X1_bins_test, data = df_test_cate, FUN = mean)$tau_hat_test
-CATE_true_test <- aggregate(true_tau ~ X1_bins_test, data = df_test_cate, FUN = mean)$true_tau
+#CATE_true_test <- aggregate(true_tau ~ X1_bins_test, data = df_test_cate, FUN = mean)$true_tau
 
-# Compute RMSE of CATE estimates
-CATE_rmse_test <- sqrt(mean((CATE_estimates_test - CATE_true_test)^2, na.rm = TRUE))
-CATE_rmse_test
+# Compute MSE of CATE estimates
+CATE_mse_test <- mean((CATE_estimates_test - true_tau_testing)^2, na.rm = TRUE)
+CATE_mse_test
 ```
 
 
 ## Causal KNN
 
+
 ```{r}
-causal_knn <- function(X, T, Y, k) {
-  n <- nrow(X)
-  tau_hat <- numeric(n)  # Store estimated CATE for each observation
+causal_knn <- function(X_train, T_train, Y_train, X_test, k) {
+  n_test <- nrow(X_test)
+  tau_hat <- numeric(n_test)  # Store estimated CATE for each test observation
   
-  for (i in 1:n) {
-    # Find k nearest neighbors
-    neighbors <- knnx.index(X, query = matrix(X[i, ], nrow = 1), k = k)
+  # Find k-nearest neighbors for each test observation in the training set
+  neighbors <- knnx.index(data = X_train, query = X_test, k = k)
+  
+  for (i in 1:n_test) {
+    idx <- neighbors[i, ]  # Indices of the k nearest neighbors
+    Y_neighbors <- Y_train[idx]
+    T_neighbors <- T_train[idx]
     
-    # Extract neighbors' treatment and outcome values
-    Y_neighbors <- Y[neighbors]
-    T_neighbors <- T[neighbors]
-    
-    # Compute local averages for treated and control groups
+    # Compute local means for treated and control
     Y1_hat <- mean(Y_neighbors[T_neighbors == 1], na.rm = TRUE)
     Y0_hat <- mean(Y_neighbors[T_neighbors == 0], na.rm = TRUE)
     
@@ -89,50 +147,19 @@ causal_knn <- function(X, T, Y, k) {
   return(tau_hat)
 }
 
-# Compute Estimated CATE for Each Observation
+# Parameters
 k <- 10  # Number of neighbors
-tau_knn <- causal_knn(X, T, Y, k)
 
-# Replace any NA values in tau_knn with 0
-tau_knn[is.na(tau_knn)] <- 0
+# Apply Causal KNN using TRAIN data for fitting, TEST data for evaluation
+tau_knn <- causal_knn(X_train, T_train, Y_train, X_test, k)
 
-# Compute RMSE to Compare tau_knn with true_tau
-rmse_knn <- sqrt(mean((tau_knn - true_tau)^2))
-rmse_knn
+# Handle NA: Instead of replacing with 0, remove NAs when calculating MSE
+mse_knn <- mean((tau_knn - true_tau_testing)^2, na.rm = TRUE)
+
+# Result
+mse_knn
 ```
 
-## AIPW
-```{r}
-# Fit the AIPW model using drgee
-covariate_names <- paste0("X", 1:p)  # Create a vector of covariate names, X1, X2, ..., Xp
-covariate_formula <- paste(covariate_names, collapse = " + ")  # Combine names into a formula string
-
-# Fit the AIPW model using drgee with correct formula syntax
-aipw_model_train <- drgee(
-  oformula = as.formula(paste("Y ~", covariate_formula)),  # Outcome model with covariates
-  eformula = as.formula(paste("T ~", covariate_formula)),  # Treatment model with covariates
-  elink = "logit",  # Logistic link function for the treatment model
-  data = train_data  # Data containing all the variables
-)
-summary(aipw_model_train)
-aipw_model_train$coefficients.all
-
-aipw_model_test <- drgee(
-  oformula = as.formula(paste("Y ~", covariate_formula)),  # Outcome model with covariates
-  eformula = as.formula(paste("T ~", covariate_formula)),  # Treatment model with covariates
-  elink = "logit",  # Logistic link function for the treatment model
-  data = test_data  # Data containing all the variables
-)
-summary(aipw_model_test)
-aipw_model_test$coefficients.all
-
-cat("Estimated CATE (Train):", aipw_model_train$coefficients, "\n")
-cat("Estimated CATE (Test):", aipw_model_test$coefficients, "\n")
-
-# Compute RMSE
-RMSE_AIPW <- sqrt(mean((aipw_model_train$coefficients.all - aipw_model_test$coefficients.all)^2, na.rm = TRUE))
-print(paste("RMSE:", round(RMSE_AIPW, 5)))
-```
 
 ## Causal Trees
 
@@ -175,7 +202,9 @@ honest_tree <- honest.causalTree(
 )
 
 # Predict Treatment Effects
-CATE_preds_honestTree <- predict(honest_tree, newdata = data.frame(Y = Y_test, X_test), type = "vector")
+#CATE_preds_honestTree <- predict(honest_tree, newdata = data.frame(Y = Y_test, X_test), type = "vector")
+
+CATE_preds_honestTree <- predict(honest_tree, newdata = as.data.frame(X_test), type = "vector")
 
 plot(CATE_preds_honestTree)
 ```
@@ -184,48 +213,52 @@ plot(CATE_preds_honestTree)
 ## Causal Forests
 
 ```{r}
-# Train Causal Forest
+
 causal_forest1 <- causal_forest(
   X = X_train, 
   Y = Y_train, 
-  W = T_train
+  W = T_train,
+  sample.fraction = 0.5,       # Double-sample honesty
+  num.trees = 2000,            # As per the paper
+  honesty = TRUE,              # Honest estimation enabled
+  honesty.fraction = 0.5,      # 50% data for splitting, 50% for estimation
+  min.node.size = 5,           # Smaller leaf size improves precision
+  honesty.prune.leaves = TRUE, # Prune leaves to maintain honesty
+  alpha = 0.05,                # Balancing exploration-exploitation
+  ci.group.size = 2            # Confidence interval adjustment
 )
 
 # Predict Treatment Effects
-preds <- predict(causal_forest1, X_test)$predictions
-hist(preds)
-
-#CATE estimates
-CATE_ALL_CF = average_treatment_effect(causal_forest1, target.sample = "all")
-average_treatment_effect(causal_forest1, target.sample = "treated")
-                                     
-
+preds_cf <- predict(causal_forest1, X_test)$predictions
+CATE_ALL_CF <- average_treatment_effect(causal_forest1, target.sample = "all")
 ```
 
 ## MSE and RMSE
 
 ```{r}
-prop_score <- mean(T_test)
+#prop_score <- mean(T_test)
 
 # Construct Y_star in our test sample
-Y_star <- T_test * (Y_test / prop_score) - (1 - T_test) * (Y_test / (1 - prop_score))
+#Y_star <- T_test * (Y_test / prop_score) - (1 - T_test) * (Y_test / (1 - prop_score))
 
 
 # Honest Tree
-MSE_causalTree <- mean((Y_star - CATE_preds_honestTree)^2)
+#MSE_causalTree <- mean((Y_star - CATE_preds_honestTree)^2)
+
+MSE_causalTree <- mean((true_tau_testing - CATE_preds_honestTree)^2)
 
 # Causal Forest GRF
-MSE_cf <- mean((Y_star - CATE_ALL_CF)^2)
+#MSE_cf <- mean((Y_star - CATE_ALL_CF)^2)
+
+MSE_cf <- mean((true_tau_testing - preds_cf)^2)
 
 MSE_causalTree
 MSE_cf
 
-RMSE_causalTree = sqrt(MSE_causalTree)
-RMSE_cf = sqrt(MSE_cf)
+#RMSE_causalTree = sqrt(MSE_causalTree)
+#RMSE_cf = sqrt(MSE_cf)
 
-RMSE_causalTree
-RMSE_cf
+#RMSE_causalTree
+#RMSE_cf
 ```
-
-
 
